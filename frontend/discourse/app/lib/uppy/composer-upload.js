@@ -356,10 +356,13 @@ export default class UppyComposerUpload {
           );
         });
 
-        const MIN_IMAGES_TO_AUTO_GRID = 3;
+        const minImagesToAutoGrid = Number(
+          this.siteSettings.auto_grid_images_minimum_count || 3
+        );
+
         if (
           this.siteSettings.enable_auto_grid_images &&
-          this.#consecutiveImages?.length >= MIN_IMAGES_TO_AUTO_GRID &&
+          this.#consecutiveImages?.length >= minImagesToAutoGrid &&
           this.textManipulation
         ) {
           this.textManipulation.autoGridImages([...this.#consecutiveImages]);
