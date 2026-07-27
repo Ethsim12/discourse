@@ -8,9 +8,12 @@ import { service } from "@ember/service";
 import { trustHTML } from "@ember/template";
 import Form from "discourse/components/form";
 import AvatarSelectorModal from "discourse/components/modal/avatar-selector";
+import PluginOutlet from "discourse/components/plugin-outlet";
 import SecondFactorForm from "discourse/components/second-factor-form";
 import SecurityKeyForm from "discourse/components/security-key-form";
 import UserField from "discourse/components/user-field";
+import WelcomeHeader from "discourse/components/welcome-header";
+import lazyHash from "discourse/helpers/lazy-hash";
 import valueEntered from "discourse/helpers/value-entered";
 import { ajax } from "discourse/lib/ajax";
 import { popupAjaxError } from "discourse/lib/ajax-error";
@@ -44,6 +47,9 @@ export default class CodeLoginForm extends Component {
   @tracked otpGeneration = 0;
   @tracked newAccount;
   @tracked accountUser;
+  @tracked name = "";
+  @tracked nameRequired = false;
+  @tracked nameError;
   @tracked username = "";
   @tracked usernameAvailable = false;
   @tracked usernameChecking = false;
@@ -113,6 +119,37 @@ export default class CodeLoginForm extends Component {
 
   get isCompleteStep() {
     return this.step === "complete";
+  }
+
+  // Login has its own page heading; only signup needs a per-step one here.
+  get heading() {
+    if (!this.isSignup) {
+      return null;
+    }
+
+    switch (this.step) {
+      case "code":
+        return {
+          title: i18n("code_login.check_your_email"),
+          subtitle: this.codeInstructions,
+        };
+      case "user-fields":
+        return {
+          title: i18n("code_login.user_fields_title"),
+          subtitle: i18n("code_login.user_fields_instructions"),
+        };
+      case "complete":
+        return {
+          title: i18n("code_login.account_ready_title"),
+          subtitle: this.usernameEditable
+            ? i18n("code_login.account_ready_edit")
+            : null,
+        };
+      case "second-factor":
+        return { title: i18n("login.second_factor_title"), subtitle: null };
+      default:
+        return { title: i18n("code_login.signup_title"), subtitle: null };
+    }
   }
 
   get continueDisabled() {
@@ -229,6 +266,9 @@ export default class CodeLoginForm extends Component {
     if (this.isUserFieldsStep) {
       data.user_fields = {};
       this.userFields.forEach((f) => (data.user_fields[f.field.id] = f.value));
+      if (this.nameRequired) {
+        data.name = this.name.trim();
+      }
     }
 
     try {
@@ -237,7 +277,11 @@ export default class CodeLoginForm extends Component {
         data,
       });
 
-      if (result?.user_fields_required && !this.isUserFieldsStep) {
+      if (
+        (result?.user_fields_required || result?.name_required) &&
+        !this.isUserFieldsStep
+      ) {
+        this.nameRequired = !!result.name_required;
         this.step = "user-fields";
         return;
       }
@@ -284,9 +328,21 @@ export default class CodeLoginForm extends Component {
   }
 
   @action
+  nameChanged(event) {
+    this.name = event.target.value;
+    this.nameError = null;
+  }
+
+  @action
   async submitUserFields() {
     this.userFieldsValidationHelper.validationVisible = true;
-    if (this.userFieldsValidationHelper.userFieldsValidation.failed) {
+    if (this.nameRequired && !this.name.trim()) {
+      this.nameError = i18n("user.name.required");
+    }
+    if (
+      this.nameError ||
+      this.userFieldsValidationHelper.userFieldsValidation.failed
+    ) {
       return;
     }
     return this.verifyCode();
@@ -515,6 +571,44 @@ export default class CodeLoginForm extends Component {
 
   <template>
     <div class="code-login-form">
+      {{#if this.heading}}
+        {{! Plugins can replace this via the signup-heading outlet. }}
+        <PluginOutlet
+          @name="signup-heading"
+          @outletArgs={{lazyHash
+            step=this.step
+            context=@context
+            title=this.heading.title
+            subtitle=this.heading.subtitle
+          }}
+        >
+          <WelcomeHeader
+            id="create-account-title"
+            @header={{this.heading.title}}
+          >
+            {{#if this.heading.subtitle}}
+              <p class="login-subheader">{{this.heading.subtitle}}</p>
+            {{/if}}
+          </WelcomeHeader>
+        </PluginOutlet>
+      {{/if}}
+
+      {{#unless this.isEmailStep}}
+        {{! Steps replace each other in the DOM, so without this hidden field
+        password managers lose track of which account is authenticating once
+        the email input unmounts. }}
+        <input
+          type="email"
+          value={{this.email}}
+          name="email"
+          autocomplete="username"
+          readonly={{true}}
+          tabindex="-1"
+          aria-hidden="true"
+          class="code-login-form__hidden-email sr-only"
+        />
+      {{/unless}}
+
       {{#if this.isEmailStep}}
         {{#if this.isSignup}}
           <p class="code-login-form__instructions">
@@ -537,10 +631,7 @@ export default class CodeLoginForm extends Component {
             @format="full"
             as |field|
           >
-            <field.Control
-              autofocus="autofocus"
-              autocomplete="username email"
-            />
+            <field.Control autofocus="autofocus" autocomplete="username" />
           </form.Field>
 
           <div class="code-login-form__email-actions">
@@ -560,12 +651,14 @@ export default class CodeLoginForm extends Component {
         </Form>
       {{else if this.isCodeStep}}
         <div class="code-login-form__code-step">
-          <h2 class="code-login-form__title">
-            {{i18n "code_login.check_your_email"}}
-          </h2>
-          <p class="code-login-form__instructions">
-            {{this.codeInstructions}}
-          </p>
+          {{#unless this.isSignup}}
+            <h2 class="code-login-form__title">
+              {{i18n "code_login.check_your_email"}}
+            </h2>
+            <p class="code-login-form__instructions">
+              {{this.codeInstructions}}
+            </p>
+          {{/unless}}
 
           {{#each this.otpGenerationArray as |generation|}}
             <DOtp
@@ -609,14 +702,16 @@ export default class CodeLoginForm extends Component {
         </div>
       {{else if this.isCompleteStep}}
         <div class="code-login-form__complete-step">
-          <h2 class="code-login-form__title">
-            {{i18n "code_login.account_ready_title"}}
-          </h2>
-          {{#if this.usernameEditable}}
-            <p class="code-login-form__instructions">
-              {{i18n "code_login.account_ready_edit"}}
-            </p>
-          {{/if}}
+          {{#unless this.isSignup}}
+            <h2 class="code-login-form__title">
+              {{i18n "code_login.account_ready_title"}}
+            </h2>
+            {{#if this.usernameEditable}}
+              <p class="code-login-form__instructions">
+                {{i18n "code_login.account_ready_edit"}}
+              </p>
+            {{/if}}
+          {{/unless}}
 
           <div class="code-login-form__new-account">
             <button
@@ -646,8 +741,10 @@ export default class CodeLoginForm extends Component {
                   placeholder={{i18n "code_login.username_placeholder"}}
                   class="code-login-form__new-account-username"
                   aria-invalid={{if this.usernameError "true"}}
+                  aria-describedby="code-login-username-error"
                 />
                 <div
+                  id="code-login-username-error"
                   class="code-login-form__error"
                   aria-live="polite"
                   role="alert"
@@ -672,12 +769,42 @@ export default class CodeLoginForm extends Component {
         </div>
       {{else if this.isUserFieldsStep}}
         <div class="code-login-form__user-fields-step">
-          <h2 class="code-login-form__title">
-            {{i18n "code_login.user_fields_title"}}
-          </h2>
-          <p class="code-login-form__instructions">
-            {{i18n "code_login.user_fields_instructions"}}
-          </p>
+          {{#unless this.isSignup}}
+            <h2 class="code-login-form__title">
+              {{i18n "code_login.user_fields_title"}}
+            </h2>
+            <p class="code-login-form__instructions">
+              {{i18n "code_login.user_fields_instructions"}}
+            </p>
+          {{/unless}}
+
+          {{#if this.nameRequired}}
+            <div class="code-login-form__name-field">
+              <label for="code-login-name">
+                {{i18n "user.name.title"}}
+              </label>
+              <input
+                {{on "input" this.nameChanged}}
+                type="text"
+                value={{this.name}}
+                id="code-login-name"
+                name="name"
+                autocomplete="name"
+                maxlength="255"
+                class="code-login-form__name"
+                aria-invalid={{if this.nameError "true"}}
+                aria-describedby="code-login-name-error"
+              />
+              <div
+                id="code-login-name-error"
+                class="code-login-form__error"
+                aria-live="polite"
+                role="alert"
+              >
+                {{this.nameError}}
+              </div>
+            </div>
+          {{/if}}
 
           <div class="user-fields">
             {{#each this.userFields as |f|}}

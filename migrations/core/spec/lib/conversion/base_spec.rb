@@ -2,7 +2,6 @@
 
 RSpec.describe Migrations::Conversion::Base do
   describe "#run" do
-    let(:offline_connection) { Migrations::Database::OfflineConnection.new }
     let(:converter) do
       TemporaryConverterModule::Converter.new({ intermediate_db: { path: "intermediate.db" } })
     end
@@ -12,90 +11,57 @@ RSpec.describe Migrations::Conversion::Base do
         "TemporaryConverterModule",
         Module.new do
           const_set("Converter", Class.new(Migrations::Conversion::Base))
-          const_set(
-            "Topics",
-            Class.new(Migrations::Conversion::ProgressStep) do
-              title "Converting topics"
-              # forces `execute_in_parallel?` to consult the pool's size; with
-              # `max_progress` below the parallel threshold the step still runs
-              # serially, so a missing pool fails fast without forking workers
-              run_in_parallel true
-
-              source do
-                def max_progress
-                  5
-                end
-
-                def items
-                  Array.new(5) { |index| { id: index } }
-                end
-              end
-
-              processor do
-                def process(item)
-                  Migrations::Database::IntermediateDB.insert(
-                    "INSERT INTO topics (original_id) VALUES (?)",
-                    item[:id],
-                  )
-                end
-              end
-            end,
-          )
-          const_set(
-            "Users",
-            Class.new(Migrations::Conversion::Step) do
-              title "Converting users"
-
-              def execute
-                Migrations::Database::IntermediateDB.insert(
-                  "INSERT INTO users (original_id) VALUES (?)",
-                  1,
-                )
-              end
-            end,
-          )
+          const_set("Topics", Class.new(Migrations::Conversion::Step) { title "Converting topics" })
+          const_set("Users", Class.new(Migrations::Conversion::Step) { title "Converting users" })
         end,
       )
 
-      Migrations::Database::IntermediateDB.setup(offline_connection)
-      # `run` closes the IntermediateDB in its `ensure`, which would discard
-      # the recorded insert statements before they can be verified
-      allow(offline_connection).to receive(:close)
+      Migrations::Database::IntermediateDB.setup(nil)
       allow(converter).to receive(:create_database)
     end
 
     after do
       Migrations::Database::IntermediateDB.setup(nil)
-      Object.send(:remove_const, "TemporaryConverterModule")
+      remove_test_const("TemporaryConverterModule")
     end
 
-    it "creates one pool and one reporter per run and wires them through both executor kinds" do
+    it "builds one reporter, then runs the scheduler over the filtered steps" do
+      scheduler = instance_double(Migrations::Conversion::StepScheduler, run: nil)
+      scheduler_args = nil
+      allow(Migrations::Conversion::StepScheduler).to receive(:new) do |**kwargs|
+        scheduler_args = kwargs
+        scheduler
+      end
+
       reporter = nil
-      allow(Migrations::Conversion::WorkerPool).to receive(:new).and_call_original
-      allow(Migrations::Conversion::ConsoleReporter).to receive(
-        :new,
-      ).and_wrap_original do |original|
-        reporter = original.call
+      allow(Migrations::Reporting::Factory).to receive(
+        :build,
+      ).and_wrap_original do |original, **kwargs|
+        reporter = original.call(**kwargs)
         allow(reporter).to receive(:close).and_call_original
         reporter
       end
 
-      expect { converter.run }.to output(/Converting topics.*Converting users/m).to_stdout
+      converter.run(skip_steps: ["users"], max_parallel_steps: 3)
 
-      expect(Migrations::Conversion::WorkerPool).to have_received(:new).once
-      expect(Migrations::Conversion::ConsoleReporter).to have_received(:new).once
+      expect(Migrations::Reporting::Factory).to have_received(:build).once
+      expect(scheduler).to have_received(:run).once
       expect(reporter).to have_received(:close).once
-      expect(offline_connection.parametrized_insert_statements).to eq(
-        [
-          *Array.new(5) { |index| ["INSERT INTO topics (original_id) VALUES (?)", [index]] },
-          ["INSERT INTO users (original_id) VALUES (?)", [1]],
-        ],
-      )
+
+      expect(scheduler_args[:step_classes]).to eq([TemporaryConverterModule::Topics])
+      expect(scheduler_args[:max_parallel_steps]).to eq(3)
+      expect(scheduler_args[:budget]).to be > 0
+      expect(scheduler_args[:reporter]).to be(reporter)
+      expect(scheduler_args[:step_factory]).to respond_to(:call)
     end
   end
 
   describe "#steps" do
     subject(:converter) { TemporaryConverterModule::Converter.new(nil) }
+
+    # `filter_steps` is private; expose it through a subclass to assert the
+    # exact order `--only`/`--skip` produce.
+    let(:base) { Class.new(described_class) { public :filter_steps }.new(nil) }
 
     before do
       Object.const_set(
@@ -103,16 +69,16 @@ RSpec.describe Migrations::Conversion::Base do
         Module.new do
           const_set("Converter", Class.new(Migrations::Conversion::Base))
           const_set("Categories", Class.new(Migrations::Conversion::Step))
-          const_set("Topics", Class.new(Migrations::Conversion::ProgressStep))
+          const_set("Topics", Class.new(Migrations::Conversion::Step))
           const_set("Users", Class.new(Migrations::Conversion::Step))
           const_set("SomeHelper", Class.new)
         end,
       )
     end
 
-    after { Object.send(:remove_const, "TemporaryConverterModule") }
+    after { remove_test_const("TemporaryConverterModule") }
 
-    it "discovers both `Step` and `ProgressStep` subclasses" do
+    it "discovers `Step` subclasses" do
       expect(converter.steps).to contain_exactly(
         TemporaryConverterModule::Categories,
         TemporaryConverterModule::Topics,
@@ -160,7 +126,7 @@ RSpec.describe Migrations::Conversion::Base do
 
       # `--only categories` pulls in the `users` dependency; it has to run
       # before `categories` because the filtered list is executed as-is.
-      filtered = converter.send(:filter_steps, converter.steps, ["categories"], [])
+      filtered = base.filter_steps(converter.steps, ["categories"], [])
 
       expect(filtered).to eq(
         [TemporaryConverterModule::Users, TemporaryConverterModule::Categories],
@@ -173,7 +139,7 @@ RSpec.describe Migrations::Conversion::Base do
       # `run` sorts the full step set first and filters afterwards, so
       # re-running a single step keeps working even when its dependency
       # isn't part of the filtered set.
-      filtered = converter.send(:filter_steps, converter.steps, ["categories"], ["users"])
+      filtered = base.filter_steps(converter.steps, ["categories"], ["users"])
 
       expect(filtered).to eq([TemporaryConverterModule::Categories])
     end

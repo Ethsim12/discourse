@@ -355,7 +355,7 @@ class TopicView
       if @topic.category_id != SiteSetting.uncategorized_category_id && @topic.category_id &&
            @topic.category
         title += " - #{@topic.category.name}"
-      elsif SiteSetting.tagging_enabled && visible_tags.exists?
+      elsif visible_tags.exists?
         title +=
           " - #{visible_tags.order("tags.#{Tag.topic_count_column(@guardian)} DESC").first.name}"
       end
@@ -421,12 +421,20 @@ class TopicView
   end
 
   def image_url
-    return @topic.image_url if @post_number == 1
-    desired_post&.image_url
+    if @post_number == 1
+      @topic.image_url || og_image_url
+    else
+      desired_post&.image_url
+    end
   end
 
   def image_upload
-    @image_upload ||= @post_number == 1 ? @topic.image_upload : desired_post&.image_upload
+    @image_upload ||=
+      if @post_number == 1
+        @topic.image_upload || og_image_upload
+      else
+        desired_post&.image_upload
+      end
   end
 
   def image_width
@@ -440,6 +448,18 @@ class TopicView
   def image_type
     ext = image_upload&.extension
     MiniMime.lookup_by_extension(ext)&.content_type if ext.present?
+  end
+
+  def og_image_upload
+    return unless SiteSetting.generate_topic_og_image
+    return if !TopicOgImageGenerator.eligible?(@topic)
+    @topic.og_image_upload
+  end
+
+  def og_image_url
+    upload = og_image_upload
+    return unless upload
+    UrlHelper.cook_url(upload.url, secure: upload.secure?)
   end
 
   def filter_posts(opts = {})
@@ -907,6 +927,10 @@ class TopicView
       .compact
   end
 
+  def visible_tags
+    @visible_tags ||= guardian.can_see_tags?(topic) ? topic.tags.visible(guardian) : Tag.none
+  end
+
   protected
 
   def read_posts_set
@@ -1185,9 +1209,5 @@ class TopicView
         StaffActionLogger.new(@user).log_check_personal_message(@topic)
       end
     end
-  end
-
-  def visible_tags
-    @visible_tags ||= topic.tags.visible(guardian)
   end
 end

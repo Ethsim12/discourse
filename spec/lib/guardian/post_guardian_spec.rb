@@ -1191,11 +1191,11 @@ RSpec.describe PostGuardian do
       expect(Guardian.new(user).filter_hidden_posts(records)).to contain_exactly(post, hidden_post)
     end
 
-    it "returns hidden posts for everyone when configured" do
+    it "does not return hidden posts for anonymous users configured via everyone" do
       SiteSetting.hidden_post_visible_groups = Group::AUTO_GROUPS[:everyone].to_s
       records = Post.where(id: [post.id, hidden_post.id])
 
-      expect(Guardian.new.filter_hidden_posts(records)).to contain_exactly(post, hidden_post)
+      expect(Guardian.new.filter_hidden_posts(records)).to contain_exactly(post)
     end
 
     it "returns hidden posts from moderated categories for category group moderators" do
@@ -1381,6 +1381,15 @@ RSpec.describe PostGuardian do
       expect(Guardian.new(post.user).can_view_edit_history?(post)).to be_truthy
     end
 
+    it "returns true for a category group moderator viewing a hidden post" do
+      SiteSetting.edit_history_visible_to_public = true
+      SiteSetting.enable_category_group_moderation = true
+      Fabricate(:category_moderation_group, category: category, group:)
+      post.update!(hidden: true)
+
+      expect(Guardian.new(user).can_view_edit_history?(post)).to be_truthy
+    end
+
     it "returns false when user can not see post" do
       post.update!(hidden: true)
 
@@ -1389,6 +1398,36 @@ RSpec.describe PostGuardian do
       guardian.stubs(:can_see_post?).returns(false)
 
       expect(guardian.can_view_edit_history?(post)).to be_falsey
+    end
+
+    context "when edit_history_visible_to_public is false" do
+      before { SiteSetting.edit_history_visible_to_public = false }
+
+      it "returns false for a regular user" do
+        expect(Guardian.new(user).can_view_edit_history?(post)).to be_falsey
+      end
+
+      it "returns true for a category group moderator" do
+        SiteSetting.enable_category_group_moderation = true
+        Fabricate(:category_moderation_group, category: category, group:)
+
+        expect(Guardian.new(user).can_view_edit_history?(post)).to be_truthy
+      end
+
+      it "returns false for a category group moderator in a different category" do
+        SiteSetting.enable_category_group_moderation = true
+        other_category = Fabricate(:category)
+        Fabricate(:category_moderation_group, category: other_category, group:)
+
+        expect(Guardian.new(user).can_view_edit_history?(post)).to be_falsey
+      end
+
+      it "returns false for a category group moderator when feature is disabled" do
+        SiteSetting.enable_category_group_moderation = false
+        Fabricate(:category_moderation_group, category: category, group:)
+
+        expect(Guardian.new(user).can_view_edit_history?(post)).to be_falsey
+      end
     end
   end
 

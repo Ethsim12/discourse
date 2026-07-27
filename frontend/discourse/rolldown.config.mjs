@@ -6,7 +6,10 @@ import dynamicChunkUrlPlugin from "./lib/dynamic-chunk-url-plugin.mjs";
 import writeResolverConfig from "./lib/embroider-vite-resolver-options.mjs";
 import maybeBabel from "./lib/maybe-babel.mjs";
 import optimizedEmber from "./lib/optimized-ember.mjs";
+import { exitIfDevServerRunning } from "./lib/rolldown-devserver-lock.mjs";
 import wrapTestModulesPlugin from "./lib/wrap-test-modules-plugin.mjs";
+
+exitIfDevServerRunning();
 
 writeResolverConfig(
   {
@@ -73,6 +76,7 @@ export function buildConfig({ devMode } = {}) {
   }
 
   return {
+    tsconfig: false,
     resolve: {
       extensions,
     },
@@ -83,6 +87,8 @@ export function buildConfig({ devMode } = {}) {
     },
     moduleTypes: {
       ".wasm": "asset",
+      ".gjs": "js",
+      ".gts": "ts",
     },
     input: {
       discourse: "discourse.js",

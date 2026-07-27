@@ -972,6 +972,27 @@ RSpec.describe TopicView do
       end
     end
 
+    context "with a tagged personal message" do
+      fab!(:pm) { Fabricate(:private_message_topic, user: user) }
+      fab!(:pm_post) { Fabricate(:post, topic: pm) }
+
+      before do
+        SiteSetting.tagging_enabled = true
+        SiteSetting.topic_page_title_includes_category = true
+        pm.tags << tag2
+      end
+
+      it "does not include the tag for participants who cannot tag personal messages" do
+        expect(TopicView.new(pm.id, user).page_title).not_to include(tag2.name)
+      end
+
+      it "includes the tag for participants who can tag personal messages" do
+        SiteSetting.pm_tags_allowed_for_groups = Group::AUTO_GROUPS[:trust_level_0]
+
+        expect(TopicView.new(pm.id, user).page_title).to end_with(tag2.name)
+      end
+    end
+
     context "with categorized topic" do
       let(:category) { Fabricate(:category) }
 
@@ -1107,6 +1128,19 @@ RSpec.describe TopicView do
         expect(topic_view_for_post(1).image_url).to eq(nil)
         expect(topic_view_for_post(2).image_url).to eq(nil)
         expect(topic_view_for_post(3).image_url).to end_with(post3_upload.url)
+      end
+
+      it "uses the generated OG image only for eligible topics" do
+        SiteSetting.generate_topic_og_image = true
+        og_upload = Fabricate(:image_upload)
+        topic.update_column(:og_image_upload_id, og_upload.id)
+
+        expect(topic_view_for_post(1).image_url).to end_with(og_upload.url)
+
+        private_category = Fabricate(:private_category, group: Fabricate(:group))
+        topic.update_column(:category_id, private_category.id)
+
+        expect(TopicView.new(topic.id, admin, post_number: 1).image_url).to eq(nil)
       end
     end
   end

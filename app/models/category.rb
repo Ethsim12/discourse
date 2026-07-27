@@ -76,6 +76,22 @@ class Category < ActiveRecord::Base
   accepts_nested_attributes_for :category_setting, update_only: true
   accepts_nested_attributes_for :category_localizations, allow_destroy: true
 
+  def nested_replies_conversion_completed?
+    !!ActiveModel::Type::Boolean.new.cast(
+      custom_fields[NestedReplies::CONVERSION_COMPLETED_CUSTOM_FIELD],
+    )
+  end
+
+  def mark_nested_replies_conversion_completed!
+    custom_fields[NestedReplies::CONVERSION_COMPLETED_CUSTOM_FIELD] = true
+    save_custom_fields(true, run_validations: false)
+  end
+
+  def clear_nested_replies_conversion_completed!
+    custom_fields.delete(NestedReplies::CONVERSION_COMPLETED_CUSTOM_FIELD)
+    save_custom_fields(true, run_validations: false)
+  end
+
   validates :user_id, presence: true
 
   validates :name,
@@ -118,6 +134,8 @@ class Category < ActiveRecord::Base
   validates :slug, exclusion: { in: RESERVED_SLUGS }
   validates :color, format: { with: /\A(\h{6}|\h{3})\z/ }
   validates :text_color, format: { with: /\A(\h{6}|\h{3})\z/ }
+
+  before_validation :normalize_default_top_period
 
   before_save :apply_permissions
   before_save :downcase_email
@@ -235,6 +253,44 @@ class Category < ActiveRecord::Base
     id IN (SELECT DISTINCT parent_category_id FROM categories WHERE id IN (:ids))
   SQL
 
+  scope :for_category_type,
+        ->(type_id, type = nil) do
+          if type_id == "all"
+            all
+          elsif type&.type_id == :discussion
+            where.not(id: Categories::TypeRegistry.non_discussion_category_ids)
+          else
+            where(id: type.find_matches.select(:id))
+          end
+        end
+
+  scope :matching_name_or_slug_ref,
+        ->(filter) do
+          filter = filter.to_s.strip.delete_prefix("#")
+          next all if filter.blank?
+
+          normalized_search =
+            filter.tr("/", SLUG_REF_SEPARATOR).gsub(
+              /#{Regexp.escape(SLUG_REF_SEPARATOR)}+/,
+              SLUG_REF_SEPARATOR,
+            )
+          normalized_filter = "%#{ActiveRecord::Base.sanitize_sql_like(normalized_search)}%"
+
+          where(
+            "#{normalize_sql("categories.name")} ILIKE #{normalize_sql("?")} OR " \
+              "#{normalize_sql("categories.slug")} ILIKE #{normalize_sql("?")} OR " \
+              "EXISTS (
+                SELECT 1
+                FROM categories parent_categories
+                WHERE parent_categories.id = categories.parent_category_id
+                  AND #{normalize_sql("parent_categories.slug || '#{SLUG_REF_SEPARATOR}' || categories.slug")} ILIKE #{normalize_sql("?")}
+              )",
+            normalized_filter,
+            normalized_filter,
+            normalized_filter,
+          )
+        end
+
   delegate :post_template, to: "self.class"
 
   # permission is just used by serialization
@@ -248,7 +304,7 @@ class Category < ActiveRecord::Base
                 :subcategory_count
 
   # Allows us to skip creating the category definition topic in tests.
-  attr_accessor :skip_category_definition
+  attr_accessor :skip_category_definition, :skip_publish
 
   enum :style_type, { square: 0, icon: 1, emoji: 2 }
 
@@ -600,14 +656,28 @@ class Category < ActiveRecord::Base
     end
   end
 
+  def self.first_paragraph_description(cooked)
+    doc = Nokogiri::HTML5.fragment(cooked)
+    doc.css("img").remove
+    doc.css("p").first&.inner_html&.strip
+  end
+
   def description_text
     return nil unless description
 
     @@cache_text ||= LruRedux::ThreadSafeCache.new(1000)
     @@cache_text.getset(description) do
-      text = Nokogiri::HTML5.fragment(description).text.strip
-      ERB::Util.html_escape(text).html_safe
+      ERB::Util.html_escape(plain_text_description.to_s).html_safe
     end
+  end
+
+  def plain_text_description
+    return nil unless description
+
+    @@cache_plain_text ||= LruRedux::ThreadSafeCache.new(1000)
+    @@cache_plain_text
+      .getset(description) { Nokogiri::HTML5.fragment(description).text.strip }
+      .presence
   end
 
   def description_excerpt
@@ -665,6 +735,8 @@ class Category < ActiveRecord::Base
   end
 
   def publish_category
+    return if skip_publish
+
     if read_restricted
       group_ids = groups.pluck(:id)
 
@@ -1309,6 +1381,10 @@ class Category < ActiveRecord::Base
 
   def ensure_category_setting
     build_category_setting if category_setting.blank?
+  end
+
+  def normalize_default_top_period
+    self.default_top_period = nil if TopTopic.periods.exclude?(default_top_period&.to_sym)
   end
 
   def group_based_posting_review_mode?(post_type)

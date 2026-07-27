@@ -15,6 +15,7 @@ import PostCookedHtml from "discourse/components/post/cooked-html";
 import PostLinks from "discourse/components/post/links";
 import PostMenu from "discourse/components/post/menu";
 import PostMetaData from "discourse/components/post/meta-data";
+import PostNotice from "discourse/components/post/notice";
 import lazyHash from "discourse/helpers/lazy-hash";
 import { ajax } from "discourse/lib/ajax";
 import { popupAjaxError } from "discourse/lib/ajax-error";
@@ -384,10 +385,18 @@ export default class NestedPost extends Component {
     });
   }
 
+  get childCacheKey() {
+    return `${this.args.topic?.id}:${this.args.post.post_number}`;
+  }
+
   async childrenForMobileFocus() {
-    const cached = this.args.fetchedChildrenCache?.get(
-      this.args.post.post_number
-    );
+    const cacheKey = this.childCacheKey;
+    const identityKey = [
+      this.args.topic?.id,
+      this.args.post.post_number,
+      this.args.sort,
+    ].join(":");
+    const cached = this.args.fetchedChildrenCache?.get(cacheKey);
     if (cached) {
       return cached.childNodes;
     }
@@ -405,14 +414,25 @@ export default class NestedPost extends Component {
       const data = await ajax(
         `/n/${this.args.topic.slug}/${this.args.topic.id}/children/${this.args.post.post_number}.json?${query}`
       );
-      if (this.isDestroying || this.isDestroyed) {
+      if (
+        this.isDestroying ||
+        this.isDestroyed ||
+        this.childCacheKey !== cacheKey ||
+        [this.args.topic?.id, this.args.post.post_number, this.args.sort].join(
+          ":"
+        ) !== identityKey
+      ) {
         return null;
       }
 
-      const childNodes = (data.children || []).map((child) =>
-        processNode(this.store, this.args.topic, child)
-      );
-      this.args.fetchedChildrenCache?.set(this.args.post.post_number, {
+      const childNodes = (data.children || [])
+        .filter(
+          (child) =>
+            child.topic_id != null &&
+            String(child.topic_id) === String(this.args.topic?.id)
+        )
+        .map((child) => processNode(this.store, this.args.topic, child));
+      this.args.fetchedChildrenCache?.set(cacheKey, {
         childNodes,
         page: data.page,
         hasMore: data.has_more || false,
@@ -583,6 +603,10 @@ export default class NestedPost extends Component {
         (if this.effectiveCollapsed "nested-post--collapsed")
         (if @isPinned "nested-post--pinned")
         (if @post.isWhisper "nested-post--whisper")
+        (if
+          (or @post.isModeratorAction (and @post.isWarning @post.firstPost))
+          "post--moderator moderator"
+        )
         (if @post.hidden "nested-post--hidden post--hidden post-hidden")
         (if (or @post.deleted @post.user_deleted) "nested-post--deleted")
         (if this.cloakingData.active "nested-post--cloaked")
@@ -743,12 +767,16 @@ export default class NestedPost extends Component {
                   class="nested-post__article boxed"
                   data-post-id={{@post.id}}
                   data-post-number={{@post.post_number}}
+                  data-topic-id={{@topic.id}}
                   {{@registerPost @post trackOnly=true}}
                 >
                   <PluginOutlet
                     @name="post-article-content"
                     @outletArgs={{postOutletArgs}}
                   >
+                    {{#if (PostNotice.shouldRender @post this.siteSettings)}}
+                      <PostNotice @post={{@post}} />
+                    {{/if}}
                     <div class="nested-post__header">
                       <PluginOutlet
                         @name="post-metadata"
@@ -776,7 +804,7 @@ export default class NestedPost extends Component {
                           }}</span>
                       {{/if}}
                     </div>
-                    <div class="nested-post__content">
+                    <div class="nested-post__content regular">
                       <PluginOutlet
                         @name="post-content-cooked-html"
                         @outletArgs={{postOutletArgs}}

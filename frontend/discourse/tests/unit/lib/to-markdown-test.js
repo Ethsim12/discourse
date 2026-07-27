@@ -444,6 +444,30 @@ helloWorld();</code>consectetur.`;
     assert.false(markdown.includes("old removed phrase"));
   });
 
+  test("drops the document-language spans Word for the web stamps on runs", async function (assert) {
+    const html = `<div class="OutlineElement"><p class="Paragraph">
+      <span class="TextRun" lang="EN-GB"><span class="NormalTextRun" lang="EN-GB">Note:</span></span>
+      <span class="TextRun" lang="EN-GB"><span class="NormalTextRun" lang="EN-GB"> materiality</span></span>
+    </p></div>`;
+
+    const markdown = await toMarkdown(html);
+
+    assert.strictEqual(markdown, "Note: materiality");
+    assert.false(markdown.includes("<span"));
+    assert.false(markdown.includes("lang="));
+  });
+
+  test("cleans a real Word for the web run (lang on TextRun, EOP marker)", async function (assert) {
+    // Trimmed from a real Word for the web clipboard.
+    const html = `<span data-contrast="auto" xml:lang="PT-BR" lang="PT-BR" class="TextRun SCXW1 BCX0"><span class="NormalTextRun SCXW1 BCX0">This</span><span class="NormalTextRun SCXW1 BCX0"><span> </span></span><span class="NormalTextRun SCXW1 BCX0">is something</span></span><span class="EOP SCXW1 BCX0" data-ccp-props="{}"> </span>`;
+
+    const markdown = await toMarkdown(html);
+
+    assert.strictEqual(markdown, "This is something");
+    assert.false(markdown.includes("<span"));
+    assert.false(markdown.includes("lang="));
+  });
+
   test("keeps mention/hash class", async function (assert) {
     const html = `
       <p>User mention: <a class="mention" href="/u/discourse">@discourse</a></p>
@@ -516,6 +540,14 @@ helloWorld();</code>consectetur.`;
     const markdown = `:custom_emoji:`;
 
     assert.strictEqual(await toMarkdown(html), markdown);
+  });
+
+  test("restores clipboard non-breaking spaces around inline nodes", async function (assert) {
+    // The copied nbsp beside the emoji must become a regular space or it won't
+    // cook; an author-typed nbsp (in "to keep") is left alone.
+    const html = `<span style="color: rgb(0,0,0)">use the<span>&nbsp;</span></span><img class="emoji" title=":heart:" alt=":heart:" /><span style="color: rgb(0,0,0)"><span>&nbsp;</span>to&nbsp;keep</span>`;
+
+    assert.strictEqual(await toMarkdown(html), `use the :heart: to\u00a0keep`);
   });
 
   test("converts image lightboxes to markdown", async function (assert) {
