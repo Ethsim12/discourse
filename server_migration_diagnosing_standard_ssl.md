@@ -75,9 +75,9 @@ total 8.0K
 
 -rw------- 1 root root 3.2K Aug  7 16:18 domain.tld.key
 
--rw-r--r-- 1 root root    0 Aug  7 16:18 domain.tld\_ecc.cer
+-rw-r--r-- 1 root root    0 Aug  7 16:18 domain.tld_ecc.cer
 
--rw------- 1 root root  227 Aug  7 16:18 domain.tld\_ecc.key
+-rw------- 1 root root  227 Aug  7 16:18 domain.tld_ecc.key
 ```
 
 then run
