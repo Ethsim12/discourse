@@ -29,7 +29,7 @@ drwxr-xr-x 12 root root 4.0K Aug  7 15:00 ..
 -rw-------  1 root root  227 Aug  7 16:06 domain.tld_ecc.key
 ```
 
-In this migration, the next step was to preserve the failed SSL/Let’s Encrypt state and let a rebuild attempt to obtain fresh certificates. ( https://meta.discourse.org/t/lets-encrypt-empty-cer-files/135241 ). A normal rebuild with intact Let’s Encrypt state should not result in a new certificate being issued unnecessarily. However, Discourse does invoke `acme.sh --issue` for both RSA and ECDSA certificates during Let’s Encrypt configuration. `acme.sh` normally determines that an existing certificate does not need replacement. If Discourse cannot verify the certificate stored in `/shared/letsencrypt`, the current template explicitly retries issuance with `--force`.
+In this migration, the next step was to preserve the failed SSL/Let’s Encrypt state and let a rebuild attempt to obtain fresh certificates. ([URL]https://meta.discourse.org/t/lets-encrypt-empty-cer-files/135241[/URL]). A normal rebuild with intact Let’s Encrypt state should not result in a new certificate being issued unnecessarily. However, Discourse does invoke `acme.sh --issue` for both RSA and ECDSA certificates during Let’s Encrypt configuration. `acme.sh` normally determines that an existing certificate does not need replacement. If Discourse cannot verify the certificate stored in `/shared/letsencrypt`, the current template explicitly retries issuance with `--force`.
 
 so what you can do is
 
